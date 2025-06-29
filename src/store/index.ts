@@ -1,7 +1,10 @@
 import { create } from 'zustand'
 import { AppState, Color, ImageData, Selection, Tool } from '../types'
+import { SegmentationResult } from '../services/segmentation'
 
 interface AppStore extends AppState {
+  segmentation: SegmentationResult | null
+  selectedAreas: number[]
   setImage: (image: ImageData) => void
   setActiveTool: (tool: Tool) => void
   setSelectedColor: (color: Color) => void
@@ -10,6 +13,9 @@ interface AppStore extends AppState {
   removeSelection: (id: string) => void
   updateSelection: (id: string, updates: Partial<Selection>) => void
   clearSelections: () => void
+  setSegmentation: (segmentation: SegmentationResult | null) => void
+  toggleSelectedArea: (classId: number) => void
+  clearSelectedAreas: () => void
 }
 
 const initialColor: Color = {
@@ -37,6 +43,8 @@ export const useAppStore = create<AppStore>((set) => ({
     selectedColor: initialColor,
     zoom: 1
   },
+  segmentation: null,
+  selectedAreas: [],
   
   setImage: (image) =>
     set((state) => ({
@@ -102,5 +110,22 @@ export const useAppStore = create<AppStore>((set) => ({
         ...state.project,
         selections: []
       }
+    })),
+    
+  setSegmentation: (segmentation) =>
+    set(() => ({
+      segmentation
+    })),
+    
+  toggleSelectedArea: (classId) =>
+    set((state) => ({
+      selectedAreas: state.selectedAreas.includes(classId)
+        ? state.selectedAreas.filter(id => id !== classId)
+        : [...state.selectedAreas, classId]
+    })),
+    
+  clearSelectedAreas: () =>
+    set(() => ({
+      selectedAreas: []
     }))
 }))
