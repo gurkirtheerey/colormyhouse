@@ -4,17 +4,24 @@ import { ImageUploader } from './components/ImageUploader'
 import { SegmentationViewer } from './components/SegmentationViewer'
 import { ManualSelector } from './components/ManualSelector'
 import { ToolSelector } from './components/ToolSelector'
+import { ColorPicker } from './components/ColorPicker'
+import { CanvasEditor } from './components/CanvasEditor'
 import { useImageProcessor } from './hooks/useImageProcessor'
 import { useSegmentation } from './hooks/useSegmentation'
 import { useAppStore } from './store'
-import { ImageData } from './types'
+import { ImageData as CustomImageData, Color } from './types'
+import { SegmentationMask } from './services/segmentation'
 
 function App() {
-  const [uploadedImage, setUploadedImage] = useState<ImageData | null>(null)
+  const [uploadedImage, setUploadedImage] = useState<CustomImageData | null>(null)
   const [currentStep, setCurrentStep] = useState<'upload' | 'segment' | 'color'>('upload')
   const [selectedTool, setSelectedTool] = useState<'ai' | 'brush' | 'eraser' | 'polygon'>('ai')
   const [brushSize, setBrushSize] = useState(10)
   const [selectedClass, setSelectedClass] = useState(1) // Default to walls
+  const [selectedColor, setSelectedColor] = useState<Color>({ hue: 220, saturation: 80, lightness: 60, hex: '#4A90E2' })
+  const [colorIntensity, setColorIntensity] = useState(1)
+  const [selectedMasks, setSelectedMasks] = useState<SegmentationMask[]>([])
+  const [finalImageData, setFinalImageData] = useState<globalThis.ImageData | null>(null)
   const imageRef = useRef<HTMLImageElement>(null)
   
   const { processImageFile, isProcessing, error, clearError } = useImageProcessor()
@@ -47,7 +54,7 @@ function App() {
     try {
       const result = await segmentImage(imageRef.current)
       setSegmentation(result)
-      setCurrentStep('color')
+      // Stay on segment step so user can select areas
     } catch (err) {
       console.error('Segmentation failed:', err)
     }
@@ -55,12 +62,30 @@ function App() {
 
   const handleAreaSelect = (classId: number) => {
     toggleSelectedArea(classId)
+    
+    // Update selected masks for color processing
+    if (segmentation) {
+      // Calculate what the new selected areas will be after toggle
+      const newSelectedAreas = selectedAreas.includes(classId)
+        ? selectedAreas.filter(id => id !== classId)
+        : [...selectedAreas, classId]
+      
+      const newSelectedMasks = segmentation.masks.filter(mask => 
+        newSelectedAreas.includes(mask.classId)
+      )
+      setSelectedMasks(newSelectedMasks)
+      
+      console.log('Selected areas:', newSelectedAreas)
+      console.log('Selected masks:', newSelectedMasks)
+    }
   }
 
   const handleReset = () => {
     setUploadedImage(null)
     setSegmentation(null)
     clearSelectedAreas()
+    setSelectedMasks([])
+    setFinalImageData(null)
     setCurrentStep('upload')
     clearError()
   }
@@ -68,6 +93,40 @@ function App() {
   const handleManualSelection = (selection: { points: number[], classId: number }) => {
     // Handle manual selection by adding it to selected areas
     toggleSelectedArea(selection.classId)
+    
+    // Update selected masks for color processing
+    if (segmentation) {
+      const newSelectedMasks = segmentation.masks.filter(mask => 
+        selectedAreas.includes(mask.classId) || mask.classId === selection.classId
+      )
+      setSelectedMasks(newSelectedMasks)
+    }
+  }
+
+  const handleColorChange = (color: Color) => {
+    setSelectedColor(color)
+  }
+
+  const handleColorIntensityChange = (intensity: number) => {
+    setColorIntensity(intensity)
+  }
+
+  const handleFinalColorChange = (imageData: globalThis.ImageData) => {
+    console.log('Final color change received:', {
+      width: imageData.width,
+      height: imageData.height,
+      dataLength: imageData.data.length
+    })
+    setFinalImageData(imageData)
+    
+    // Create a data URL to see if the image was processed
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')!
+    canvas.width = imageData.width
+    canvas.height = imageData.height
+    ctx.putImageData(imageData, 0, 0)
+    const dataUrl = canvas.toDataURL()
+    console.log('Final image data URL length:', dataUrl.length)
   }
 
   return (
@@ -168,72 +227,108 @@ function App() {
               
               {selectedTool === 'ai' ? (
                 /* AI Segmentation Interface */
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Image Preview */}
-                  <div className="space-y-4">
-                    <div className="bg-gray-100 rounded-lg overflow-hidden">
-                      <img
-                        ref={imageRef}
-                        src={uploadedImage?.url}
-                        alt="Uploaded house"
-                        className="w-full h-auto max-h-96 object-contain"
-                        crossOrigin="anonymous"
-                      />
+                !segmentation ? (
+                  /* Show AI setup before segmentation */
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Image Preview */}
+                    <div className="space-y-4">
+                      <div className="bg-gray-100 rounded-lg overflow-hidden">
+                        <img
+                          ref={imageRef}
+                          src={uploadedImage?.url}
+                          alt="Uploaded house"
+                          className="w-full h-auto max-h-96 object-contain"
+                          crossOrigin="anonymous"
+                        />
+                      </div>
+                      <div className="text-sm text-gray-500 space-y-1">
+                        <p>Dimensions: {uploadedImage?.width} × {uploadedImage?.height}px</p>
+                        <p>Ready for AI analysis</p>
+                      </div>
                     </div>
-                    <div className="text-sm text-gray-500 space-y-1">
-                      <p>Dimensions: {uploadedImage?.width} × {uploadedImage?.height}px</p>
-                      <p>Ready for AI analysis</p>
+                    
+                    {/* Segmentation Controls */}
+                    <div className="space-y-4">
+                      <h3 className="text-lg font-medium text-gray-900">AI Analysis</h3>
+                      <p className="text-gray-600">
+                        Our AI will automatically detect different parts of your house including walls, roof, doors, windows, and more.
+                      </p>
+                      
+                      {segmentError && (
+                        <div className="flex items-center space-x-2 text-red-600 bg-red-50 p-3 rounded-md">
+                          <svg className="h-5 w-5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                          </svg>
+                          <span className="text-sm">{segmentError}</span>
+                        </div>
+                      )}
+                      
+                      <button
+                        onClick={handleStartSegmentation}
+                        disabled={isSegmenting}
+                        className={`w-full font-medium py-3 px-4 rounded-lg transition-colors ${
+                          isSegmenting
+                            ? 'bg-gray-400 cursor-not-allowed text-white'
+                            : 'bg-blue-600 hover:bg-blue-700 text-white'
+                        }`}
+                      >
+                        {isSegmenting ? (
+                          <div className="flex items-center justify-center space-x-2">
+                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                            <span>Analyzing Image...</span>
+                          </div>
+                        ) : (
+                          'Start AI Segmentation'
+                        )}
+                      </button>
+                      
+                      <div className="bg-blue-50 p-4 rounded-lg">
+                        <h4 className="font-medium text-blue-900 mb-2">What we'll detect:</h4>
+                        <ul className="text-sm text-blue-700 space-y-1">
+                          <li>• Exterior walls</li>
+                          <li>• Roof and roofing materials</li>
+                          <li>• Windows and glass</li>
+                          <li>• Doors and entryways</li>
+                          <li>• Trim and architectural details</li>
+                          <li>• Landscape elements</li>
+                        </ul>
+                      </div>
                     </div>
                   </div>
-                  
-                  {/* Segmentation Controls */}
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-medium text-gray-900">AI Analysis</h3>
-                    <p className="text-gray-600">
-                      Our AI will automatically detect different parts of your house including walls, roof, doors, windows, and more.
-                    </p>
-                    
-                    {segmentError && (
-                      <div className="flex items-center space-x-2 text-red-600 bg-red-50 p-3 rounded-md">
-                        <svg className="h-5 w-5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                        </svg>
-                        <span className="text-sm">{segmentError}</span>
-                      </div>
+                ) : (
+                  /* Show segmentation results for area selection */
+                  <div className="space-y-6">
+                    {uploadedImage && (
+                      <SegmentationViewer
+                        imageUrl={uploadedImage.url}
+                        imageWidth={uploadedImage.width}
+                        imageHeight={uploadedImage.height}
+                        segmentationResult={segmentation}
+                        onAreaSelect={handleAreaSelect}
+                        selectedAreas={selectedAreas}
+                      />
                     )}
                     
-                    <button
-                      onClick={handleStartSegmentation}
-                      disabled={isSegmenting}
-                      className={`w-full font-medium py-3 px-4 rounded-lg transition-colors ${
-                        isSegmenting
-                          ? 'bg-gray-400 cursor-not-allowed text-white'
-                          : 'bg-blue-600 hover:bg-blue-700 text-white'
-                      }`}
-                    >
-                      {isSegmenting ? (
-                        <div className="flex items-center justify-center space-x-2">
-                          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                          <span>Analyzing Image...</span>
-                        </div>
-                      ) : (
-                        'Start AI Segmentation'
-                      )}
-                    </button>
-                    
-                    <div className="bg-blue-50 p-4 rounded-lg">
-                      <h4 className="font-medium text-blue-900 mb-2">What we'll detect:</h4>
-                      <ul className="text-sm text-blue-700 space-y-1">
-                        <li>• Exterior walls</li>
-                        <li>• Roof and roofing materials</li>
-                        <li>• Windows and glass</li>
-                        <li>• Doors and entryways</li>
-                        <li>• Trim and architectural details</li>
-                        <li>• Landscape elements</li>
-                      </ul>
-                    </div>
+                    {/* Proceed to Color Selection */}
+                    {selectedAreas.length > 0 && (
+                      <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                        <h4 className="font-medium text-green-900 mb-2">
+                          Ready for Color Selection
+                        </h4>
+                        <p className="text-sm text-green-700 mb-3">
+                          You've selected {selectedAreas.length} area{selectedAreas.length !== 1 ? 's' : ''} to recolor. 
+                          Ready to choose colors?
+                        </p>
+                        <button 
+                          onClick={() => setCurrentStep('color')}
+                          className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                        >
+                          Choose Colors
+                        </button>
+                      </div>
+                    )}
                   </div>
-                </div>
+                )
               ) : (
                 /* Manual Selection Interface */
                 <div className="space-y-6">
@@ -277,7 +372,7 @@ function App() {
             <div className="bg-white rounded-lg shadow p-6">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-semibold text-gray-900">
-                  Select Areas to Recolor
+                  Choose Colors & Preview
                 </h2>
                 <div className="flex items-center space-x-2">
                   <button
@@ -301,31 +396,102 @@ function App() {
                 </div>
               </div>
               
-              {uploadedImage && segmentation && (
-                <SegmentationViewer
-                  imageUrl={uploadedImage.url}
-                  imageWidth={uploadedImage.width}
-                  imageHeight={uploadedImage.height}
-                  segmentationResult={segmentation}
-                  onAreaSelect={handleAreaSelect}
-                  selectedAreas={selectedAreas}
-                />
-              )}
-              
-              {selectedAreas.length > 0 && (
-                <div className="mt-6 bg-green-50 border border-green-200 rounded-lg p-4">
-                  <h4 className="font-medium text-green-900 mb-2">
-                    Ready for Color Selection
-                  </h4>
-                  <p className="text-sm text-green-700 mb-3">
-                    You've selected {selectedAreas.length} area{selectedAreas.length !== 1 ? 's' : ''} to recolor. 
-                    Next, you'll be able to choose colors and see a real-time preview.
-                  </p>
-                  <button className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors">
-                    Choose Colors
-                  </button>
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                {/* Canvas Editor with Real-time Preview */}
+                <div className="xl:col-span-2">
+                  {uploadedImage && (
+                    <CanvasEditor
+                      imageUrl={uploadedImage.url}
+                      width={800}
+                      height={600}
+                      selectedColor={selectedColor}
+                      colorIntensity={colorIntensity}
+                      selectedMasks={selectedMasks}
+                      onColorChange={handleFinalColorChange}
+                    />
+                  )}
                 </div>
-              )}
+                
+                {/* Color Picker */}
+                <div className="space-y-6">
+                  <ColorPicker
+                    initialColor={selectedColor}
+                    onColorChange={handleColorChange}
+                    onIntensityChange={handleColorIntensityChange}
+                    intensity={colorIntensity}
+                    disabled={selectedMasks.length === 0}
+                  />
+                  
+                  {/* Selected Areas Info */}
+                  {selectedMasks.length > 0 ? (
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                      <h4 className="font-medium text-blue-900 mb-2">
+                        Selected Areas ({selectedMasks.length})
+                      </h4>
+                      <div className="space-y-2">
+                        {selectedMasks.map((mask, index) => (
+                          <div key={index} className="flex items-center space-x-2 text-sm">
+                            <div 
+                              className="w-3 h-3 rounded border border-gray-300"
+                              style={{ backgroundColor: segmentation?.classes.find(c => c.id === mask.classId)?.color }}
+                            />
+                            <span className="text-blue-700">
+                              {segmentation?.classes.find(c => c.id === mask.classId)?.displayName}
+                            </span>
+                            <span className="text-blue-500">
+                              ({Math.round(mask.confidence * 100)}% confidence)
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                      <h4 className="font-medium text-yellow-900 mb-2">
+                        No Areas Selected
+                      </h4>
+                      <p className="text-sm text-yellow-700 mb-3">
+                        Go back to the segmentation step to select areas you want to recolor.
+                      </p>
+                      <button 
+                        onClick={() => setCurrentStep('segment')}
+                        className="bg-yellow-600 hover:bg-yellow-700 text-white font-medium py-2 px-4 rounded-lg transition-colors text-sm"
+                      >
+                        Select Areas
+                      </button>
+                    </div>
+                  )}
+                  
+                  {/* Export Options */}
+                  {finalImageData && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                      <h4 className="font-medium text-green-900 mb-2">
+                        Ready to Download
+                      </h4>
+                      <p className="text-sm text-green-700 mb-3">
+                        Your color changes have been applied successfully!
+                      </p>
+                      <button 
+                        onClick={() => {
+                          const canvas = document.createElement('canvas')
+                          const ctx = canvas.getContext('2d')!
+                          canvas.width = finalImageData.width
+                          canvas.height = finalImageData.height
+                          ctx.putImageData(finalImageData, 0, 0)
+                          
+                          const link = document.createElement('a')
+                          link.download = 'colored-house.png'
+                          link.href = canvas.toDataURL()
+                          link.click()
+                        }}
+                        className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                      >
+                        Download Result
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         )}
