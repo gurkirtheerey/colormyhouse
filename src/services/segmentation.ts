@@ -1,4 +1,4 @@
-import * as tf from '@tensorflow/tfjs'
+// import * as tf from '@tensorflow/tfjs' // TODO: Will be used for actual TensorFlow model loading
 
 export interface SegmentationMask {
   data: Uint8Array
@@ -55,76 +55,43 @@ class SegmentationService {
     }
 
     try {
-      // Convert image to tensor
-      const imageTensor = tf.browser.fromPixels(imageElement)
-      const resized = tf.image.resizeBilinear(imageTensor, [512, 512])
-      const normalized = resized.div(255.0)
-      const batched = normalized.expandDims(0)
-
-      // For now, create mock segmentation masks
-      const mockResult = await this.createMockSegmentation(imageElement.width, imageElement.height)
-
-      // Clean up tensors
-      imageTensor.dispose()
-      resized.dispose()
-      normalized.dispose()
-      batched.dispose()
-
-      return mockResult
+      // Analyze the actual image content
+      const analysisResult = await this.analyzeImageContent(imageElement)
+      
+      return analysisResult
     } catch (error) {
       console.error('Segmentation failed:', error)
       throw error
     }
   }
 
-  private async createMockSegmentation(width: number, height: number): Promise<SegmentationResult> {
-    // Create realistic mock segmentation masks with proper shapes
-    const masks: SegmentationMask[] = []
+  private async analyzeImageContent(imageElement: HTMLImageElement): Promise<SegmentationResult> {
+    // Create canvas to analyze pixel data
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')!
     
-    // Create a single composite mask for all objects
-    const compositeMask = new Uint8Array(width * height)
+    canvas.width = imageElement.width
+    canvas.height = imageElement.height
     
-    // Sky - irregular natural shape
-    this.createSkyMask(compositeMask, width, height, 7)
+    // Draw image to get pixel data
+    ctx.drawImage(imageElement, 0, 0)
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const pixels = imageData.data
     
-    // Roof - triangular/trapezoidal shape
-    this.createRoofMask(compositeMask, width, height, 2)
+    // Analyze image using multiple techniques
+    const colorRegions = this.analyzeColorRegions(pixels, canvas.width, canvas.height)
+    const edgeMap = this.detectEdges(pixels, canvas.width, canvas.height)
+    const brightnessMask = this.analyzeBrightness(pixels, canvas.width, canvas.height)
     
-    // Walls - house facade shape
-    this.createWallsMask(compositeMask, width, height, 1)
-    
-    // Windows - rectangular with precise edges
-    this.createWindowMask(compositeMask, width, height, 3, 0.2, 0.4, 0.15, 0.2) // Left window
-    this.createWindowMask(compositeMask, width, height, 3, 0.65, 0.4, 0.15, 0.2) // Right window
-    
-    // Door - arched or rectangular door shape
-    this.createDoorMask(compositeMask, width, height, 4)
-    
-    // Landscape - natural ground contour
-    this.createLandscapeMask(compositeMask, width, height, 6)
-    
-    // Create individual masks for each class
-    const classIds = [1, 2, 3, 4, 6, 7] // All classes except background
-    const confidences: { [key: number]: number } = { 1: 0.94, 2: 0.91, 3: 0.88, 4: 0.92, 6: 0.79, 7: 0.96 }
-    
-    for (const classId of classIds) {
-      const mask = new Uint8Array(width * height)
-      for (let i = 0; i < compositeMask.length; i++) {
-        if (compositeMask[i] === classId) {
-          mask[i] = classId
-        }
-      }
-      
-      const segClass = SEGMENTATION_CLASSES.find(c => c.id === classId)!
-      masks.push({
-        data: mask,
-        width,
-        height,
-        classId,
-        className: segClass.name,
-        confidence: confidences[classId] || 0.85
-      })
-    }
+    // Create intelligent segmentation based on actual image content
+    const masks = await this.createIntelligentSegmentation(
+      pixels, 
+      colorRegions, 
+      edgeMap, 
+      brightnessMask,
+      canvas.width, 
+      canvas.height
+    )
 
     return {
       masks,
@@ -132,143 +99,409 @@ class SegmentationService {
     }
   }
 
-  private createSkyMask(mask: Uint8Array, width: number, height: number, classId: number): void {
-    const skyHeight = Math.floor(height * 0.18) // Sky takes up top 18%
-    for (let y = 0; y < skyHeight; y++) {
-      // Create irregular sky boundary
-      const boundaryVariation = Math.sin(y * 0.1) * 3 + Math.sin(y * 0.05) * 5
-      const adjustedHeight = skyHeight + boundaryVariation
-      if (y < adjustedHeight) {
-        for (let x = 0; x < width; x++) {
-          mask[y * width + x] = classId
-        }
-      }
-    }
-  }
-
-  private createRoofMask(mask: Uint8Array, width: number, height: number, classId: number): void {
-    const roofTop = Math.floor(height * 0.15)
-    const roofBottom = Math.floor(height * 0.35)
-    const roofCenterX = width / 2
+  private analyzeColorRegions(pixels: Uint8ClampedArray, width: number, height: number): number[] {
+    const regions = new Array(width * height).fill(0)
+    const visited = new Array(width * height).fill(false)
+    let regionId = 1
     
-    for (let y = roofTop; y < roofBottom; y++) {
-      const progress = (y - roofTop) / (roofBottom - roofTop)
-      // Create triangular/trapezoidal roof shape
-      const roofWidth = width * (0.2 + progress * 0.6) // Starts narrow, gets wider
-      const leftEdge = roofCenterX - roofWidth / 2
-      const rightEdge = roofCenterX + roofWidth / 2
-      
-      for (let x = Math.floor(leftEdge); x < Math.floor(rightEdge); x++) {
-        if (x >= 0 && x < width && mask[y * width + x] === 0) {
-          // Add roof texture variation
-          if (Math.random() > 0.05) {
-            mask[y * width + x] = classId
-          }
-        }
-      }
-    }
-  }
-
-  private createWallsMask(mask: Uint8Array, width: number, height: number, classId: number): void {
-    const wallTop = Math.floor(height * 0.32)
-    const wallBottom = Math.floor(height * 0.75)
-    const wallLeft = Math.floor(width * 0.15)
-    const wallRight = Math.floor(width * 0.85)
+    // Color similarity threshold
+    const colorThreshold = 30
     
-    for (let y = wallTop; y < wallBottom; y++) {
-      for (let x = wallLeft; x < wallRight; x++) {
-        if (mask[y * width + x] === 0) { // Don't overwrite existing objects
-          // Add wall texture and slight irregularities
-          const noise = Math.random()
-          if (noise > 0.02) { // 98% fill rate for solid walls
-            mask[y * width + x] = classId
-          }
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const index = y * width + x
+        
+        if (!visited[index]) {
+          // Start flood fill for similar colors
+          const pixelIndex = index * 4
+          const r = pixels[pixelIndex]
+          const g = pixels[pixelIndex + 1]
+          const b = pixels[pixelIndex + 2]
+          
+          this.floodFillColorRegion(pixels, regions, visited, x, y, width, height, r, g, b, regionId, colorThreshold)
+          regionId++
         }
       }
     }
+    
+    return regions
   }
 
-  private createWindowMask(
-    mask: Uint8Array, 
+  private floodFillColorRegion(
+    pixels: Uint8ClampedArray, 
+    regions: number[], 
+    visited: boolean[], 
+    startX: number, 
+    startY: number, 
     width: number, 
     height: number, 
-    classId: number,
-    relX: number, 
-    relY: number, 
-    relW: number, 
-    relH: number
+    targetR: number, 
+    targetG: number, 
+    targetB: number, 
+    regionId: number, 
+    threshold: number
   ): void {
-    const startX = Math.floor(relX * width)
-    const startY = Math.floor(relY * height)
-    const endX = Math.floor((relX + relW) * width)
-    const endY = Math.floor((relY + relH) * height)
+    const stack = [{x: startX, y: startY}]
     
-    // Create precise rectangular window with clean edges
-    for (let y = startY; y < endY; y++) {
-      for (let x = startX; x < endX; x++) {
-        if (x >= 0 && x < width && y >= 0 && y < height) {
-          // Add window frame effect - slightly thicker edges
-          const isEdge = (x === startX || x === endX - 1 || y === startY || y === endY - 1)
-          const isInner = (x > startX + 2 && x < endX - 2 && y > startY + 2 && y < endY - 2)
-          
-          if (isEdge || isInner) {
-            mask[y * width + x] = classId
-          }
-        }
-      }
-    }
-  }
-
-  private createDoorMask(mask: Uint8Array, width: number, height: number, classId: number): void {
-    const doorCenterX = width / 2
-    const doorWidth = Math.floor(width * 0.12)
-    const doorTop = Math.floor(height * 0.52)
-    const doorBottom = Math.floor(height * 0.75)
-    const doorLeft = Math.floor(doorCenterX - doorWidth / 2)
-    const doorRight = Math.floor(doorCenterX + doorWidth / 2)
-    
-    for (let y = doorTop; y < doorBottom; y++) {
-      for (let x = doorLeft; x < doorRight; x++) {
-        if (x >= 0 && x < width && y >= 0 && y < height) {
-          // Create door with slight arch at top
-          const distFromTop = y - doorTop
-          const archHeight = 8
-          if (distFromTop < archHeight) {
-            // Arch calculation
-            const centerDist = Math.abs(x - doorCenterX)
-            const maxDist = doorWidth / 2
-            const archY = Math.sqrt(Math.max(0, archHeight * archHeight - (centerDist / maxDist * archHeight) ** 2))
-            if (distFromTop < archY || distFromTop >= archHeight * 0.7) {
-              mask[y * width + x] = classId
-            }
-          } else {
-            mask[y * width + x] = classId
-          }
-        }
-      }
-    }
-  }
-
-  private createLandscapeMask(mask: Uint8Array, width: number, height: number, classId: number): void {
-    const landscapeStart = Math.floor(height * 0.75)
-    
-    for (let y = landscapeStart; y < height; y++) {
-      // Create natural ground contour
-      const contourVariation = Math.sin(y * 0.1) * 2 + Math.cos(y * 0.08) * 3
-      const adjustedStart = landscapeStart + contourVariation
+    while (stack.length > 0) {
+      const {x, y} = stack.pop()!
       
-      if (y >= adjustedStart) {
-        for (let x = 0; x < width; x++) {
-          if (mask[y * width + x] === 0) { // Don't overwrite existing objects
-            // Add natural variation to landscape
-            if (Math.random() > 0.08) {
-              mask[y * width + x] = classId
-            }
-          }
-        }
+      if (x < 0 || x >= width || y < 0 || y >= height) continue
+      
+      const index = y * width + x
+      if (visited[index]) continue
+      
+      const pixelIndex = index * 4
+      const r = pixels[pixelIndex]
+      const g = pixels[pixelIndex + 1]
+      const b = pixels[pixelIndex + 2]
+      
+      // Check color similarity
+      const colorDiff = Math.sqrt(
+        (r - targetR) ** 2 + 
+        (g - targetG) ** 2 + 
+        (b - targetB) ** 2
+      )
+      
+      if (colorDiff <= threshold) {
+        visited[index] = true
+        regions[index] = regionId
+        
+        // Add neighbors to stack
+        stack.push({x: x + 1, y})
+        stack.push({x: x - 1, y})
+        stack.push({x, y: y + 1})
+        stack.push({x, y: y - 1})
       }
     }
   }
+
+  private detectEdges(pixels: Uint8ClampedArray, width: number, height: number): number[] {
+    const edges = new Array(width * height).fill(0)
+    
+    // Sobel edge detection
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const gx = this.getGradientX(pixels, x, y, width)
+        const gy = this.getGradientY(pixels, x, y, width)
+        const magnitude = Math.sqrt(gx * gx + gy * gy)
+        
+        edges[y * width + x] = magnitude > 50 ? 1 : 0
+      }
+    }
+    
+    return edges
+  }
+
+  private getGradientX(pixels: Uint8ClampedArray, x: number, y: number, width: number): number {
+    const getGray = (px: number, py: number) => {
+      const index = (py * width + px) * 4
+      return (pixels[index] + pixels[index + 1] + pixels[index + 2]) / 3
+    }
+    
+    return (
+      -1 * getGray(x - 1, y - 1) + 1 * getGray(x + 1, y - 1) +
+      -2 * getGray(x - 1, y) + 2 * getGray(x + 1, y) +
+      -1 * getGray(x - 1, y + 1) + 1 * getGray(x + 1, y + 1)
+    )
+  }
+
+  private getGradientY(pixels: Uint8ClampedArray, x: number, y: number, width: number): number {
+    const getGray = (px: number, py: number) => {
+      const index = (py * width + px) * 4
+      return (pixels[index] + pixels[index + 1] + pixels[index + 2]) / 3
+    }
+    
+    return (
+      -1 * getGray(x - 1, y - 1) + -2 * getGray(x, y - 1) + -1 * getGray(x + 1, y - 1) +
+      1 * getGray(x - 1, y + 1) + 2 * getGray(x, y + 1) + 1 * getGray(x + 1, y + 1)
+    )
+  }
+
+  private analyzeBrightness(pixels: Uint8ClampedArray, width: number, height: number): number[] {
+    const brightness = new Array(width * height).fill(0)
+    
+    for (let i = 0; i < width * height; i++) {
+      const pixelIndex = i * 4
+      const r = pixels[pixelIndex]
+      const g = pixels[pixelIndex + 1]
+      const b = pixels[pixelIndex + 2]
+      
+      // Calculate perceived brightness
+      brightness[i] = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    }
+    
+    return brightness
+  }
+
+  private async createIntelligentSegmentation(
+    pixels: Uint8ClampedArray,
+    colorRegions: number[],
+    edgeMap: number[],
+    brightnessMask: number[],
+    width: number,
+    height: number
+  ): Promise<SegmentationMask[]> {
+    const masks: SegmentationMask[] = []
+    
+    // Analyze the image to determine likely house features
+    const skyMask = this.detectSky(pixels, brightnessMask, width, height)
+    const wallMask = this.detectWalls(pixels, colorRegions, edgeMap, width, height)
+    const roofMask = this.detectRoof(pixels, colorRegions, brightnessMask, width, height)
+    const windowMask = this.detectWindows(pixels, edgeMap, brightnessMask, width, height)
+    const doorMask = this.detectDoors(pixels, edgeMap, brightnessMask, width, height)
+    const landscapeMask = this.detectLandscape(pixels, colorRegions, brightnessMask, width, height)
+    
+    // Create masks for detected regions
+    const detectedRegions = [
+      { mask: skyMask, classId: 7, name: 'sky', confidence: this.calculateConfidence(skyMask) },
+      { mask: roofMask, classId: 2, name: 'roof', confidence: this.calculateConfidence(roofMask) },
+      { mask: wallMask, classId: 1, name: 'walls', confidence: this.calculateConfidence(wallMask) },
+      { mask: windowMask, classId: 3, name: 'windows', confidence: this.calculateConfidence(windowMask) },
+      { mask: doorMask, classId: 4, name: 'doors', confidence: this.calculateConfidence(doorMask) },
+      { mask: landscapeMask, classId: 6, name: 'landscape', confidence: this.calculateConfidence(landscapeMask) }
+    ]
+    
+    // Only include regions with reasonable confidence
+    for (const region of detectedRegions) {
+      if (region.confidence > 0.1) { // At least 10% confidence
+        const segClass = SEGMENTATION_CLASSES.find(c => c.id === region.classId)!
+        
+        masks.push({
+          data: region.mask,
+          width,
+          height,
+          classId: region.classId,
+          className: segClass.name,
+          confidence: region.confidence
+        })
+      }
+    }
+    
+    return masks
+  }
+
+  private detectSky(pixels: Uint8ClampedArray, brightness: number[], width: number, height: number): Uint8Array {
+    const mask = new Uint8Array(width * height)
+    
+    // Sky is typically in upper portion, bright, and blue-ish
+    for (let y = 0; y < Math.floor(height * 0.6); y++) {
+      for (let x = 0; x < width; x++) {
+        const index = y * width + x
+        const pixelIndex = index * 4
+        
+        const r = pixels[pixelIndex]
+        const g = pixels[pixelIndex + 1]
+        const b = pixels[pixelIndex + 2]
+        
+        // Check for blue-ish sky colors and brightness
+        const isBluish = b > r && b > g
+        const isBright = brightness[index] > 0.4
+        const isUpperPortion = y < height * 0.4
+        
+        if ((isBluish && isBright) || (isUpperPortion && brightness[index] > 0.7)) {
+          mask[index] = 7 // Sky class
+        }
+      }
+    }
+    
+    return mask
+  }
+
+  private detectWalls(_pixels: Uint8ClampedArray, colorRegions: number[], edges: number[], width: number, height: number): Uint8Array {
+    const mask = new Uint8Array(width * height)
+    
+    // Find large, uniform color regions in the middle portion that aren't edges
+    const regionSizes = new Map<number, number>()
+    
+    // Count region sizes
+    for (let i = 0; i < colorRegions.length; i++) {
+      const regionId = colorRegions[i]
+      regionSizes.set(regionId, (regionSizes.get(regionId) || 0) + 1)
+    }
+    
+    // Find large regions likely to be walls
+    const largeRegions = new Set<number>()
+    for (const [regionId, size] of regionSizes) {
+      if (size > width * height * 0.05) { // At least 5% of image
+        largeRegions.add(regionId)
+      }
+    }
+    
+    for (let y = Math.floor(height * 0.2); y < Math.floor(height * 0.8); y++) {
+      for (let x = 0; x < width; x++) {
+        const index = y * width + x
+        const regionId = colorRegions[index]
+        
+        if (largeRegions.has(regionId) && edges[index] === 0) {
+          mask[index] = 1 // Walls class
+        }
+      }
+    }
+    
+    return mask
+  }
+
+  private detectRoof(pixels: Uint8ClampedArray, _colorRegions: number[], brightness: number[], width: number, height: number): Uint8Array {
+    const mask = new Uint8Array(width * height)
+    
+    // Roof is typically in upper portion, darker than sky, with consistent color
+    for (let y = 0; y < Math.floor(height * 0.5); y++) {
+      for (let x = 0; x < width; x++) {
+        const index = y * width + x
+        const pixelIndex = index * 4
+        
+        const r = pixels[pixelIndex]
+        const g = pixels[pixelIndex + 1]
+        const b = pixels[pixelIndex + 2]
+        
+        // Check for typical roof colors (dark, often reddish or grayish)
+        const isDark = brightness[index] < 0.6
+        const isUpperPortion = y < height * 0.4
+        const isRoofColor = (r > b && g > b) || (Math.abs(r - g) < 20 && Math.abs(g - b) < 20)
+        
+        if (isDark && isUpperPortion && isRoofColor) {
+          mask[index] = 2 // Roof class
+        }
+      }
+    }
+    
+    return mask
+  }
+
+  private detectWindows(pixels: Uint8ClampedArray, edges: number[], brightness: number[], width: number, height: number): Uint8Array {
+    const mask = new Uint8Array(width * height)
+    
+    // Windows are typically rectangular, reflective (bright), with strong edges
+    for (let y = Math.floor(height * 0.2); y < Math.floor(height * 0.8); y++) {
+      for (let x = 0; x < width; x++) {
+        const index = y * width + x
+        
+        const isBright = brightness[index] > 0.6
+        const hasEdges = this.hasStrongEdgesNearby(edges, x, y, width, height, 5)
+        const isReflective = this.isReflectiveArea(pixels, x, y, width, height)
+        
+        if (isBright && hasEdges && isReflective) {
+          mask[index] = 3 // Windows class
+        }
+      }
+    }
+    
+    return mask
+  }
+
+  private detectDoors(pixels: Uint8ClampedArray, edges: number[], _brightness: number[], width: number, height: number): Uint8Array {
+    const mask = new Uint8Array(width * height)
+    
+    // Doors are typically vertical rectangles with strong edges, in lower-middle portion
+    for (let y = Math.floor(height * 0.4); y < Math.floor(height * 0.9); y++) {
+      for (let x = Math.floor(width * 0.2); x < Math.floor(width * 0.8); x++) {
+        const index = y * width + x
+        
+        const hasVerticalEdges = this.hasVerticalEdgesNearby(edges, x, y, width, height)
+        const isDoorArea = y > height * 0.5 // Lower portion
+        const hasDoorColor = this.hasDoorColor(pixels, x, y, width)
+        
+        if (hasVerticalEdges && isDoorArea && hasDoorColor) {
+          mask[index] = 4 // Doors class
+        }
+      }
+    }
+    
+    return mask
+  }
+
+  private detectLandscape(pixels: Uint8ClampedArray, _colorRegions: number[], _brightness: number[], width: number, height: number): Uint8Array {
+    const mask = new Uint8Array(width * height)
+    
+    // Landscape is typically in lower portion, green-ish, with natural textures
+    for (let y = Math.floor(height * 0.7); y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const index = y * width + x
+        const pixelIndex = index * 4
+        
+        const r = pixels[pixelIndex]
+        const g = pixels[pixelIndex + 1]
+        const b = pixels[pixelIndex + 2]
+        
+        // Check for green/brown landscape colors
+        const isGreenish = g > r && g > b
+        const isBrownish = r > b && g > b * 1.2
+        const isLowerPortion = y > height * 0.75
+        
+        if ((isGreenish || isBrownish) && isLowerPortion) {
+          mask[index] = 6 // Landscape class
+        }
+      }
+    }
+    
+    return mask
+  }
+
+  // Helper methods
+  private hasStrongEdgesNearby(edges: number[], x: number, y: number, width: number, height: number, radius: number): boolean {
+    let edgeCount = 0
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = x + dx
+        const ny = y + dy
+        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+          if (edges[ny * width + nx] === 1) edgeCount++
+        }
+      }
+    }
+    return edgeCount > radius
+  }
+
+  private hasVerticalEdgesNearby(edges: number[], x: number, y: number, width: number, height: number): boolean {
+    // Check for vertical edge patterns
+    for (let dy = -3; dy <= 3; dy++) {
+      const ny = y + dy
+      if (ny >= 0 && ny < height) {
+        if (edges[ny * width + x] === 1) return true
+      }
+    }
+    return false
+  }
+
+  private isReflectiveArea(pixels: Uint8ClampedArray, x: number, y: number, width: number, _height: number): boolean {
+    const index = y * width + x
+    const pixelIndex = index * 4
+    
+    const r = pixels[pixelIndex]
+    const g = pixels[pixelIndex + 1]
+    const b = pixels[pixelIndex + 2]
+    
+    // Check for reflective (glass-like) properties - often blue-ish and bright
+    const isBlueish = b > r * 1.1 && b > g * 1.1
+    const isNeutral = Math.abs(r - g) < 30 && Math.abs(g - b) < 30 && Math.abs(r - b) < 30
+    
+    return isBlueish || isNeutral
+  }
+
+  private hasDoorColor(pixels: Uint8ClampedArray, x: number, y: number, width: number): boolean {
+    const index = y * width + x
+    const pixelIndex = index * 4
+    
+    const r = pixels[pixelIndex]
+    const g = pixels[pixelIndex + 1]
+    const b = pixels[pixelIndex + 2]
+    
+    // Doors are often brown, white, or dark colors
+    const isBrown = r > g && r > b && g > b
+    const isWhite = r > 200 && g > 200 && b > 200
+    const isDark = r < 100 && g < 100 && b < 100
+    
+    return isBrown || isWhite || isDark
+  }
+
+  private calculateConfidence(mask: Uint8Array): number {
+    const totalPixels = mask.length
+    const filledPixels = mask.filter(pixel => pixel > 0).length
+    return filledPixels / totalPixels
+  }
+
+
 
   getClassById(id: number): SegmentationClass | undefined {
     return SEGMENTATION_CLASSES.find(c => c.id === id)

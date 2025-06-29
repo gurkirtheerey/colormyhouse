@@ -2,6 +2,8 @@ import { useState, useRef } from 'react'
 import './App.css'
 import { ImageUploader } from './components/ImageUploader'
 import { SegmentationViewer } from './components/SegmentationViewer'
+import { ManualSelector } from './components/ManualSelector'
+import { ToolSelector } from './components/ToolSelector'
 import { useImageProcessor } from './hooks/useImageProcessor'
 import { useSegmentation } from './hooks/useSegmentation'
 import { useAppStore } from './store'
@@ -10,6 +12,9 @@ import { ImageData } from './types'
 function App() {
   const [uploadedImage, setUploadedImage] = useState<ImageData | null>(null)
   const [currentStep, setCurrentStep] = useState<'upload' | 'segment' | 'color'>('upload')
+  const [selectedTool, setSelectedTool] = useState<'ai' | 'brush' | 'eraser' | 'polygon'>('ai')
+  const [brushSize, setBrushSize] = useState(10)
+  const [selectedClass, setSelectedClass] = useState(1) // Default to walls
   const imageRef = useRef<HTMLImageElement>(null)
   
   const { processImageFile, isProcessing, error, clearError } = useImageProcessor()
@@ -58,6 +63,11 @@ function App() {
     clearSelectedAreas()
     setCurrentStep('upload')
     clearError()
+  }
+
+  const handleManualSelection = (selection: { points: number[], classId: number }) => {
+    // Handle manual selection by adding it to selected areas
+    toggleSelectedArea(selection.classId)
   }
 
   return (
@@ -130,10 +140,20 @@ function App() {
         ) : currentStep === 'segment' ? (
           /* Segmentation step */
           <div className="space-y-6">
+            {/* Tool Selector */}
+            <ToolSelector
+              selectedTool={selectedTool}
+              onToolChange={setSelectedTool}
+              brushSize={brushSize}
+              onBrushSizeChange={setBrushSize}
+              selectedClass={selectedClass}
+              onClassChange={setSelectedClass}
+            />
+
             <div className="bg-white rounded-lg shadow p-6">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-semibold text-gray-900">
-                  AI Segmentation
+                  {selectedTool === 'ai' ? 'AI Segmentation' : 'Manual Selection'}
                 </h2>
                 <button
                   onClick={handleReset}
@@ -146,72 +166,109 @@ function App() {
                 </button>
               </div>
               
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Image Preview */}
-                <div className="space-y-4">
-                  <div className="bg-gray-100 rounded-lg overflow-hidden">
-                    <img
-                      ref={imageRef}
-                      src={uploadedImage?.url}
-                      alt="Uploaded house"
-                      className="w-full h-auto max-h-96 object-contain"
-                      crossOrigin="anonymous"
-                    />
+              {selectedTool === 'ai' ? (
+                /* AI Segmentation Interface */
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* Image Preview */}
+                  <div className="space-y-4">
+                    <div className="bg-gray-100 rounded-lg overflow-hidden">
+                      <img
+                        ref={imageRef}
+                        src={uploadedImage?.url}
+                        alt="Uploaded house"
+                        className="w-full h-auto max-h-96 object-contain"
+                        crossOrigin="anonymous"
+                      />
+                    </div>
+                    <div className="text-sm text-gray-500 space-y-1">
+                      <p>Dimensions: {uploadedImage?.width} × {uploadedImage?.height}px</p>
+                      <p>Ready for AI analysis</p>
+                    </div>
                   </div>
-                  <div className="text-sm text-gray-500 space-y-1">
-                    <p>Dimensions: {uploadedImage?.width} × {uploadedImage?.height}px</p>
-                    <p>Ready for AI analysis</p>
+                  
+                  {/* Segmentation Controls */}
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-medium text-gray-900">AI Analysis</h3>
+                    <p className="text-gray-600">
+                      Our AI will automatically detect different parts of your house including walls, roof, doors, windows, and more.
+                    </p>
+                    
+                    {segmentError && (
+                      <div className="flex items-center space-x-2 text-red-600 bg-red-50 p-3 rounded-md">
+                        <svg className="h-5 w-5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                        </svg>
+                        <span className="text-sm">{segmentError}</span>
+                      </div>
+                    )}
+                    
+                    <button
+                      onClick={handleStartSegmentation}
+                      disabled={isSegmenting}
+                      className={`w-full font-medium py-3 px-4 rounded-lg transition-colors ${
+                        isSegmenting
+                          ? 'bg-gray-400 cursor-not-allowed text-white'
+                          : 'bg-blue-600 hover:bg-blue-700 text-white'
+                      }`}
+                    >
+                      {isSegmenting ? (
+                        <div className="flex items-center justify-center space-x-2">
+                          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                          <span>Analyzing Image...</span>
+                        </div>
+                      ) : (
+                        'Start AI Segmentation'
+                      )}
+                    </button>
+                    
+                    <div className="bg-blue-50 p-4 rounded-lg">
+                      <h4 className="font-medium text-blue-900 mb-2">What we'll detect:</h4>
+                      <ul className="text-sm text-blue-700 space-y-1">
+                        <li>• Exterior walls</li>
+                        <li>• Roof and roofing materials</li>
+                        <li>• Windows and glass</li>
+                        <li>• Doors and entryways</li>
+                        <li>• Trim and architectural details</li>
+                        <li>• Landscape elements</li>
+                      </ul>
+                    </div>
                   </div>
                 </div>
-                
-                {/* Segmentation Controls */}
-                <div className="space-y-4">
-                  <h3 className="text-lg font-medium text-gray-900">AI Analysis</h3>
-                  <p className="text-gray-600">
-                    Our AI will automatically detect different parts of your house including walls, roof, doors, windows, and more.
-                  </p>
-                  
-                  {segmentError && (
-                    <div className="flex items-center space-x-2 text-red-600 bg-red-50 p-3 rounded-md">
-                      <svg className="h-5 w-5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                      </svg>
-                      <span className="text-sm">{segmentError}</span>
-                    </div>
+              ) : (
+                /* Manual Selection Interface */
+                <div className="space-y-6">
+                  {uploadedImage && (
+                    <ManualSelector
+                      imageUrl={uploadedImage.url}
+                      imageWidth={uploadedImage.width}
+                      imageHeight={uploadedImage.height}
+                      onSelectionComplete={handleManualSelection}
+                      selectedTool={selectedTool as 'brush' | 'eraser' | 'polygon'}
+                      brushSize={brushSize}
+                      selectedClass={selectedClass}
+                    />
                   )}
                   
-                  <button
-                    onClick={handleStartSegmentation}
-                    disabled={isSegmenting}
-                    className={`w-full font-medium py-3 px-4 rounded-lg transition-colors ${
-                      isSegmenting
-                        ? 'bg-gray-400 cursor-not-allowed text-white'
-                        : 'bg-blue-600 hover:bg-blue-700 text-white'
-                    }`}
-                  >
-                    {isSegmenting ? (
-                      <div className="flex items-center justify-center space-x-2">
-                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                        <span>Analyzing Image...</span>
-                      </div>
-                    ) : (
-                      'Start AI Segmentation'
-                    )}
-                  </button>
-                  
-                  <div className="bg-blue-50 p-4 rounded-lg">
-                    <h4 className="font-medium text-blue-900 mb-2">What we'll detect:</h4>
-                    <ul className="text-sm text-blue-700 space-y-1">
-                      <li>• Exterior walls</li>
-                      <li>• Roof and roofing materials</li>
-                      <li>• Windows and glass</li>
-                      <li>• Doors and entryways</li>
-                      <li>• Trim and architectural details</li>
-                      <li>• Landscape elements</li>
-                    </ul>
-                  </div>
+                  {/* Proceed to Color Selection */}
+                  {selectedAreas.length > 0 && (
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                      <h4 className="font-medium text-green-900 mb-2">
+                        Ready for Color Selection
+                      </h4>
+                      <p className="text-sm text-green-700 mb-3">
+                        You've selected {selectedAreas.length} area{selectedAreas.length !== 1 ? 's' : ''} to recolor. 
+                        Ready to choose colors?
+                      </p>
+                      <button 
+                        onClick={() => setCurrentStep('color')}
+                        className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                      >
+                        Choose Colors
+                      </button>
+                    </div>
+                  )}
                 </div>
-              </div>
+              )}
             </div>
           </div>
         ) : (
